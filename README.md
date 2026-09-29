@@ -21,7 +21,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-Used to convert Philips scanner acquired Xe gas exchange (Dixon), calibration, and Mask (proton) scans to XeCTC compliant MRD files, which can then the analyzed with (https://github.com/Xe-MRI-CTC/xenon-gas-exchange-consortium). Or my branch (rh-dev) for some extra features.
+Used to convert Philips scanner acquired Xe gas exchange (Dixon), calibration, and Mask (proton) scans to XeCTC compliant MRD files, which can then be analyzed with (https://github.com/Xe-MRI-CTC/xenon-gas-exchange-consortium). Or my branch (rh-dev) for some extra features.
 
 To run:
 ```
