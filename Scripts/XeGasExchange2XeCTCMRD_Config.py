@@ -1,4 +1,5 @@
 from enum import Enum, auto
+import math  # RH: for math.nan proton delay
 
 
 class DataType(Enum):
@@ -11,7 +12,8 @@ class Config():
     '''Configuration class to correctly modify standard MRD conversion to XeCTC GasEx MRD'''
 
     def __init__(self):  # default values hard coded for XeCTC acquisition at CCHMC
-        self.institution = 'CCHMC' # 'CCHMC' | 'Polarean'
+        self.institution = 'CCHMC' # 'CCHMC' | 'Duke' | 'Polarean'  # RH: Duke added (set via --institution)
+        self.is_duke = False  # RH: True if 'Duke' in scan name or institution == 'Duke' (set in update)
         self.field_strength = 3.0
         self.H1resonanceFrequency_Hz = 127753955
         self.orientation = 'Coronal'
@@ -45,6 +47,12 @@ class Config():
             self.trajorder = 1
             self.gr_delay = +0.36
 
+        # RH: Duke protocol: own .sin, Halton spiral single interleave, dyn0 = gas / dyn1 = dissolved
+        if 'duke' in rls.header['sin']['scan_name'][0][0].lower() or self.institution == 'Duke':
+            self.is_duke = True
+            self.trajorder = 2
+            self.contrast_order = [1, 2]
+
         # if multiple frequencies (stored as dynamics/repitition)
         if mrdHeader.encoding[0].encodingLimits.repetition.maximum > 0:
             self.data_type = DataType.DIXON                        
@@ -57,6 +65,7 @@ class Config():
             self.multi_echo = True
 
         if self.data_type == DataType.UTE:
+            self.gr_delay = math.nan  # RH: proton uses non_cart_fid_delay from its own .sin, not the xenon delay
             return  # skip all xenon specific parameters
 
         # 2 Mixes required to be cartesian; none of these should be so require an acquisition without 2 mixes (bonus spec)

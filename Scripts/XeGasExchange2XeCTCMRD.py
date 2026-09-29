@@ -10,7 +10,7 @@ import readphilips.ReadPhilips as rp
 import ismrmrd as mrd
 from Scripts.XeGasExchange2XeCTCMRD_Config import Config, DataType
 import argparse
-from tkinter import filedialog, messagebox
+from tkinter import filedialog  # RH: messagebox no longer used
 import tkinter as tk
 import numpy as np
 import copy
@@ -23,8 +23,16 @@ from scipy.io import savemat
 # Constants
 H1_GAMMA = 42577.4688
 
+def acquired_matrix(sin):
+    # RH: acquired (not recon) matrix along readout from .sin: max_encoding - min_encoding + 1
+    return int(float(sin['max_encoding_numbers'][0][0]) - float(sin['min_encoding_numbers'][0][0]) + 1)
+
+
 def make_filtered_mrd_by_indices(src_path, dst_path, keep_indices):
     src = mrd.Dataset(str(src_path), "dataset", create_if_needed=False)
+    dst_path = Path(dst_path)
+    if dst_path.exists():
+        dst_path.unlink()  # RH: remove stale file so a rerun doesn't append duplicate acqs
     dst = mrd.Dataset(str(dst_path), "dataset", create_if_needed=True)
 
     dst.write_xml_header(src.read_xml_header())
@@ -496,7 +504,7 @@ def reorder_crds_to_scanner_labels(acqs, crds, rep_to_use=None, set_to_use=None)
 
     return crds_out, ky_order
 
-def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
+def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None, institution=None):  # RH: added institution
     # Get paths
     if data_file == '' and raw_file == '':
         raise RuntimeError(
@@ -522,17 +530,7 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
         rlsName = raw_file
 
 
-    if traj_file is None:
-        traj_present = messagebox.askyesno(
-            title=".sin file present?",
-            message="Is a .sin file available (select 'No' for default T1 .sin file)?"
-        )
-        if traj_present:
-            traj_file = filedialog.askopenfilename(
-                title='Select trajectory file', filetypes=[("Trajectory files","*.sin")],
-                initialdir=outDir)
-        else:
-            traj_file = None
+    # RH: removed ".sin file present?" prompt; always use default trajectory .sin from resources/ (unless -t given)
 
     path = os.path.normpath(rlsName)
     fname = path.split(os.sep)
@@ -544,6 +542,8 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
 
     # Get config
     data_set_config = Config()
+    if institution:
+        data_set_config.institution = institution  # RH: override default 'CCHMC' (e.g. 'Duke', 'Polarean')
 
     # Run converter
     inputData = p2m.Ph2Mrd(dlName, rlsName)
@@ -598,7 +598,8 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
     
     # Get path to sin file trajectories if necessary
     if data_set_config.data_type == DataType.CALIBRATION:
-        data_set_config.ext_traj == False
+        data_set_config.ext_traj = False  # RH: was '==' (no-op); calibration now uses its own .sin
+    n_keep_ute = None  # RH: proton readout length after trimming to xenon k-range (set below)
     if data_set_config.ext_traj == True:
         if traj_file == None:
             # Directory containing the running script
@@ -608,7 +609,7 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
             if 'FLORET'.lower() in rls.header['sin']['scan_name'][0][0].lower():
                 ext_coords = repo_root / "resources" / "Polarean_Xenon_FLORET_Dixon_20251205-NoSpectra.sin"
             else:
-                ext_coords = repo_root / "resources" / "20221025_144528_DukeIPF_Gas_Exchange.sin"
+                ext_coords = repo_root / "resources" / "CCHMC_DukeIPF_Dissolved_Xe_20221025.sin"  # RH: point to renamed Duke .sin
             
             if data_set_config.institution == 'CCHMC':
                 ext_coords = repo_root / "resources" / "CCHMC_Dissolved_Xe_20191008 - 3T-T1.sin"
@@ -622,7 +623,14 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
                     ("Trajectory .sin file", "*.sin")], initialdir=outDir)
         else:
             ext_coords = traj_file
-            
+
+        if data_set_config.is_duke:
+            ext_coords = rlsName  # RH: Duke protocol .sin has full trajectory info -> use the scan's own .sin
+
+        if data_set_config.data_type == DataType.UTE:
+            ref_coords = ext_coords  # RH: default xenon .sin kept as k-space reference for proton scaling
+            ext_coords = rlsName  # RH: proton uses its own .sin, not the default xenon .sin
+
         inputDataTraj = rp.PhilipsData(ext_coords)
         inputDataTraj.trajtype = data_set_config.trajorder
         print('config_traj_type = ', inputDataTraj.trajtype)
@@ -642,7 +650,25 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
                 crds_flyback = inputDataTraj.radparams['COORDS_FLYBACK']
         elif traj_type == 2:  # spiral
             crds = inputDataTraj.spparams['COORDS_EXPANDED']
-            
+
+        # RH: pipeline grids proton on the xenon grid -> express proton traj in xenon k-units
+        #     (ratio of acquired matrices, not recon voxel sizes) and keep only |k|<=0.5
+        if data_set_config.data_type == DataType.UTE and data_set_config.is_duke:
+            print("RH: Duke protocol proton -> traj scale 1.0 (same acquired matrix as xenon), no trimming")
+        elif data_set_config.data_type == DataType.UTE:
+            refData = rp.PhilipsData(ref_coords)
+            refData.readParamOnly = True
+            refData.compute()
+            acq_ref = acquired_matrix(refData.header['sin'])
+            acq_ute = acquired_matrix(inputDataTraj.header['sin'])
+            ute_scale = acq_ute / acq_ref
+            crds = crds * ute_scale
+            kr_max = np.max(np.linalg.norm(crds, axis=-1), axis=tuple(range(crds.ndim - 2)))  # per-sample max radius
+            n_keep_ute = int(np.sum(kr_max <= 0.5))
+            crds = crds[..., :n_keep_ute, :]
+            print(f"RH: proton traj scaled by {ute_scale:.4f} (acquired matrix {acq_ute}/{acq_ref}); "
+                  f"kept {n_keep_ute}/{kr_max.size} samples with |k|<=0.5")
+
         # Haltoned Spiral, multiple interleaves: remap columns from acquisition order -> scanner ky labels
         n_interleaves = crds.shape[0]
         if data_set_config.data_type == DataType.DIXON and data_set_config.trajorder == 2 and n_interleaves > 1:
@@ -658,7 +684,7 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
             if 'crds_flyback' in locals():
                 crds_flyback, _ = reorder_crds_to_scanner_labels(acqs_for_perm, crds_flyback, rep_to_use=rep0)            
         
-    if debug_mode:      
+    if debug_mode and data_set_config.ext_traj:  # RH: crds only exists when ext traj is computed
         # save coords as .mat file
         save_dir = os.path.dirname(data_file)
         os.makedirs(save_dir, exist_ok=True)
@@ -697,11 +723,12 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
     
     # Modify to xenon MRD header
     dwell = mrd.xsd.userParameterDoubleType('dwell')
-    if data_set_config.ext_traj == True:
-        dwell.value = float(
-            inputDataTraj.header['sin']['sample_time_interval'][0][0])
-    else:
-        dwell.value = float(rls.header['sin']['sample_time_interval'][0][0])
+    dwell_sin = inputDataTraj.header['sin'] if data_set_config.ext_traj == True else rls.header['sin']
+    if 'sample_time_interval' in dwell_sin:
+        dwell.value = float(dwell_sin['sample_time_interval'][0][0])
+    else:  # RH: older .sin (e.g. 2021 XeCTC) lacks sample_time_interval -> use dwell stored by convert()
+        dwell.value = float(dset.read_acquisition(0).sample_time_us)
+        print(f"RH: WARNING - sample_time_interval not in .sin; using acquisition dwell {dwell.value} us")
     trajDescr.userParameterDouble.insert(0, dwell)
 
     ramp_time = mrd.xsd.userParameterLongType('ramp_time')
@@ -764,6 +791,11 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
             (enc.encodingLimits.kspace_encoding_step_2.maximum+1) * temp_max_spokes_per_intlv) - 1
         enc.encodingLimits.kspace_encoding_step_2.maximum = 0
     
+    # RH: proton readout trimmed to xenon k-range -> update readout size in header
+    if n_keep_ute is not None:
+        enc.encodedSpace.matrixSize.x = n_keep_ute
+        enc.encodingLimits.kspace_encoding_step_0.maximum = n_keep_ute - 1
+
     # Save updated header
     header.userParameters = userParams
     header.sequenceParameters = pars
@@ -1333,6 +1365,7 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
     # MRD:      | slice    | average | segment | set      | phase | repetition | contrast | kz | ky | kx
     # XeCTCMRD: | N/A      | N/A     | N/A     | spec/img | N/A   | contrast   | set      | kz | ky | kx
     
+    k0_by_contrast = {}  # RH: |k0| per xemrd contrast, for gas/dissolved label sanity check
     for acqnum in range(len(acqs)):
         acq_temp = acqs[acqnum]
         if debug_mode:
@@ -1349,6 +1382,13 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
             acq_temp.measurement_uid = acq_temp.idx.set
             
         if data_set_config.ext_traj == True:
+            # RH: trim proton readout to the samples kept within the xenon k-range (|k|<=0.5)
+            if n_keep_ute is not None and acq_temp.number_of_samples > n_keep_ute:
+                data_keep = acq_temp.data[:, :n_keep_ute].copy()
+                acq_temp.resize(number_of_samples=n_keep_ute,
+                                active_channels=acq_temp.active_channels,
+                                trajectory_dimensions=acq_temp.trajectory_dimensions)
+                acq_temp.data[:] = data_keep
             try:
                 if acq_temp.idx.contrast == 0:
                     traj = crds[acq_temp.idx.kspace_encode_step_2,
@@ -1379,6 +1419,8 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
             acq_temp.idx.kspace_encode_step_1 = 0
         if data_set_config.data_type == DataType.DIXON:
             acq_temp.idx.contrast = data_set_config.contrast_order[acq_temp.idx.repetition]
+            k0_by_contrast.setdefault(acq_temp.idx.contrast, []).append(
+                float(np.abs(acq_temp.data[0, 0])))  # RH: collect k0 for sanity check
         if data_set_config.data_type == DataType.UTE:
             acq_temp.idx.contrast = 0
 
@@ -1392,7 +1434,14 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None):
 
         # Replace old acq header
         dset.write_acquisition(acq_temp, acqnum)
-        
+
+    # RH: sanity check - gas (contrast 1) should have stronger k0 than dissolved (contrast 2)
+    if 1 in k0_by_contrast and 2 in k0_by_contrast:
+        k0_gas, k0_dis = np.mean(k0_by_contrast[1]), np.mean(k0_by_contrast[2])
+        print(f"RH: mean |k0| gas={k0_gas:.1f}, dissolved={k0_dis:.1f} (contrast_order={data_set_config.contrast_order})")
+        if k0_gas < k0_dis:
+            print("RH: WARNING - 'gas' is weaker than 'dissolved'; gas/dissolved labels may be swapped (check contrast_order)")
+
     if data_set_config.data_type == DataType.DIXON:
         if data_set_config.gas_contam_removal and data_set_config.exclude_bonus_spec:
             mrdPath = Path(mrdName)
@@ -1466,13 +1515,21 @@ if __name__ == "__main__":
         default=None,
         help="The path to the trajectory file (default: None). Pass '' if want file dialog."
     )
+    parser.add_argument(  # RH: select institution/protocol defaults (Duke is also detected from scan name)
+        "-i", "--institution",
+        type=str,
+        default=None,
+        choices=["CCHMC", "Duke", "Polarean"],
+        help="Institution/protocol (default: CCHMC). 'Duke' uses each scan's own .sin and proton scale 1.0."
+    )
 
     args, unknown_args = parser.parse_known_args()
 
     # Call the main function with parsed arguments
     Gx2XeCTCMRD(data_file=args.data_file,
                 raw_file=args.raw_file,
-                traj_file=args.traj_file)
+                traj_file=args.traj_file,
+                institution=args.institution)
 
 
 
