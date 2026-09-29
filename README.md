@@ -1,7 +1,7 @@
 # Philips2MRD
 Converter(s) for Philips raw data to ISMRMRD format.
 
-Changes in this branch are created by Riaz Hussain, PhD.
+Changes in this fork are made by Riaz Hussain, PhD for Cincinnati specific data.
 
 ## rh-dev branch
 - Default trajectory `.sin` always used (no prompt); fixed renamed Duke `.sin` path
