@@ -1,0 +1,8 @@
+# Python 3.12 (conda env 'philips2mrd'); tkinter comes with conda Python
+# Versions match xenon-gas-exchange-consortium setup/requirements.txt so MRD files are compatible
+ismrmrd==1.14.2
+xsdata==26.2
+h5py==3.16.0
+numpy==1.26.4
+scipy==1.13.1
+matplotlib==3.8.4
