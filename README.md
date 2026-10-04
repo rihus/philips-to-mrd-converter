@@ -30,7 +30,7 @@ python Scripts/XeGasExchange2XeCTCMRD.py -d <raw_XXX.data> -r <YYYYMMDD_HHMMSS_s
 - Run without `-d`/`-r` to pick files from dialog.
 - Keep `.data/.list` and `.raw/.lab/.sin` in the same folder; `.raw` name must start with scan date (YYYYMMDD).
 - Output is named after the folder: `<folder>_dixon.h5`, `<folder>_proton.h5`, `<folder>_calibration.h5`.
-- `-i` (default CCHMC): Duke is also detected from scan name.
+- Institution/protocol is detected from scan name (CPIR/Dissolved = CCHMC, Duke, FLORET/Xenon_3D_radial = Polarean); `-i` only needed when the name does not tell (e.g. CTC scans), otherwise it stops with error.
   - CCHMC: default trajectory `.sin` from `resources/`.
   - Duke: scan's own `.sin`.
   - Polarean: Polarean `.sin` from `resources/`.

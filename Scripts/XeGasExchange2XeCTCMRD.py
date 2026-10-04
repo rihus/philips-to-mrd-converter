@@ -23,6 +23,33 @@ from scipy.io import savemat
 # Constants
 H1_GAMMA = 42577.4688
 
+VALID_INSTITUTIONS = ("CCHMC", "Duke", "Polarean")  # RH: institution/protocol names accepted by the converter
+
+
+def check_institution(institution):
+    # RH: validate institution argument (case-insensitive); None/'' means auto-detect from scan name
+    if institution is None or institution == '':
+        return None
+    match = {v.lower(): v for v in VALID_INSTITUTIONS}.get(str(institution).strip().lower())
+    if match is None:
+        raise ValueError(
+            f"institution must be one of {', '.join(VALID_INSTITUTIONS)} (got {institution!r}). "
+            "Note: the 4th argument of Gx2XeCTCMRD is institution, not an output folder.")
+    return match
+
+
+def detect_institution(scan_name):
+    # RH: institution/protocol from the .sin scan name; None if not recognised
+    name = scan_name.lower()
+    if 'duke' in name:
+        return 'Duke'
+    if 'cpir' in name or 'dissolved' in name:
+        return 'CCHMC'
+    if 'polarean' in name or 'floret' in name or 'xenon_3d_radial' in name:
+        return 'Polarean'
+    return None
+
+
 def acquired_matrix(sin):
     # RH: acquired (not recon) matrix along readout from .sin: max_encoding - min_encoding + 1
     return int(float(sin['max_encoding_numbers'][0][0]) - float(sin['min_encoding_numbers'][0][0]) + 1)
@@ -505,6 +532,8 @@ def reorder_crds_to_scanner_labels(acqs, crds, rep_to_use=None, set_to_use=None)
     return crds_out, ky_order
 
 def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None, institution=None):  # RH: added institution
+    institution = check_institution(institution)  # RH: fail early on an invalid institution (e.g. a folder path)
+
     # Get paths
     if data_file == '' and raw_file == '':
         raise RuntimeError(
@@ -542,8 +571,24 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None, institution=None)
 
     # Get config
     data_set_config = Config()
+
+    # RH: institution/protocol is detected from the scan name; -i/institution only overrides it.
+    #     Stop if neither gives one (no silent CCHMC default).
+    sinInfo = rp.PhilipsData(rlsName)
+    sinInfo.readParamOnly = True
+    sinInfo.compute()
+    scan_name = sinInfo.header['sin']['scan_name'][0][0]
+    detected = detect_institution(scan_name)
     if institution:
-        data_set_config.institution = institution  # RH: override default 'CCHMC' (e.g. 'Duke', 'Polarean')
+        data_set_config.institution = institution
+        print(f"RH: institution = {institution} (from institution argument; scan name '{scan_name}')")
+    elif detected:
+        data_set_config.institution = detected
+        print(f"RH: institution = {detected} (from scan name '{scan_name}')")
+    else:
+        raise ValueError(
+            f"Could not detect institution/protocol from scan name '{scan_name}'. "
+            f"Pass it explicitly: -i/institution = {', '.join(VALID_INSTITUTIONS)}.")
 
     # Run converter
     inputData = p2m.Ph2Mrd(dlName, rlsName)
@@ -614,7 +659,8 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None, institution=None)
             if data_set_config.institution == 'CCHMC':
                 ext_coords = repo_root / "resources" / "CCHMC_Dissolved_Xe_20191008 - 3T-T1.sin"
 
-            if data_set_config.institution == 'Polarean':
+            # RH: FLORET keeps its FLORET .sin above (FLORET is now detected as Polarean)
+            if data_set_config.institution == 'Polarean' and 'floret' not in rls.header['sin']['scan_name'][0][0].lower():
                 ext_coords = repo_root / "resources" / "Polarean_Xenon_Radial_Dixon_20260211_NoSpec.sin"
                 
             # Safety check
@@ -1515,12 +1561,12 @@ if __name__ == "__main__":
         default=None,
         help="The path to the trajectory file (default: None). Pass '' if want file dialog."
     )
-    parser.add_argument(  # RH: select institution/protocol defaults (Duke is also detected from scan name)
+    parser.add_argument(  # RH: optional override; institution/protocol is detected from the scan name
         "-i", "--institution",
         type=str,
         default=None,
-        choices=["CCHMC", "Duke", "Polarean"],
-        help="Institution/protocol (default: CCHMC). 'Duke' uses each scan's own .sin and proton scale 1.0."
+        help=f"Institution/protocol override ({', '.join(VALID_INSTITUTIONS)}; default: detected from scan name). "
+             "Needed only when the scan name does not identify it."
     )
 
     args, unknown_args = parser.parse_known_args()

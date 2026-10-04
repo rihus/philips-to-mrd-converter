@@ -12,7 +12,7 @@ class Config():
     '''Configuration class to correctly modify standard MRD conversion to XeCTC GasEx MRD'''
 
     def __init__(self):  # default values hard coded for XeCTC acquisition at CCHMC
-        self.institution = 'CCHMC' # 'CCHMC' | 'Duke' | 'Polarean'  # RH: Duke added (set via --institution)
+        self.institution = 'CCHMC' # 'CCHMC' | 'Duke' | 'Polarean'  # RH: set by converter (scan name or --institution)
         self.is_duke = False  # RH: True if 'Duke' in scan name or institution == 'Duke' (set in update)
         self.field_strength = 3.0
         self.H1resonanceFrequency_Hz = 127753955
