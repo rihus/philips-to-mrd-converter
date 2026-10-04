@@ -595,6 +595,7 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None, institution=None)
     inputData.trajorder = data_set_config.trajorder
     inputData.delay = data_set_config.gr_delay
     mrdName, rls, dl = inputData.convert(outDir)
+    mrdName_base = Path(mrdName)  # RH: intermediate file from convert(); removed at the end if left over
     dset = mrd.Dataset(mrdName, "dataset", create_if_needed=False)
     
     # Get Config for XeMRD scan
@@ -1535,6 +1536,10 @@ def Gx2XeCTCMRD(data_file=None, raw_file=None, traj_file=None, institution=None)
             pass
         os.rename(mrdName, os.path.join(
             mrdName.parent, patientID+'_proton.h5'))
+
+    # RH: leave only the final file - remove the intermediate .h5 when a filtered copy was the one renamed
+    if Path(mrdName) != mrdName_base and mrdName_base.exists():
+        mrdName_base.unlink()
 
 
 if __name__ == "__main__":
